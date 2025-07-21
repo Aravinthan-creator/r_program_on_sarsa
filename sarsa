@@ -1,0 +1,163 @@
+# Install required package once
+# install.packages("ggplot2")
+
+library(ggplot2)
+
+# Configuration
+GRID_SIZE <- 10
+START <- c(1, 1)
+GOAL <- c(GRID_SIZE, GRID_SIZE)
+EPISODES <- 425
+MAX_STEPS <- 200
+EPSILON <- 1
+EPSILON_DECAY <- 0.99
+EPSILON_MIN <- 0.01
+ALPHA <- 0.1
+GAMMA <- 0.99
+ACTIONS <- list(c(0,1), c(1,0), c(0,-1), c(-1,0))  # Right, Down, Left, Up
+
+# Initialize Q-table
+init_q_table <- function() {
+  array(0, dim = c(GRID_SIZE, GRID_SIZE, 4))
+}
+
+# Choose epsilon-greedy action
+choose_action <- function(q, state, epsilon) {
+  if (runif(1) < epsilon) {
+    sample(1:4, 1)
+  } else {
+    x <- state[1]
+    y <- state[2]
+    which.max(q[x, y, ])
+  }
+}
+
+# Take step
+take_step <- function(state, action, maze) {
+  next_state <- state + ACTIONS[[action]]
+  x <- next_state[1]
+  y <- next_state[2]
+
+  if (x < 1 || x > GRID_SIZE || y < 1 || y > GRID_SIZE || maze[x, y] == 1) {
+    return(list(state=state, reward=-10, done=FALSE))
+  }
+
+  if (all(next_state == GOAL)) {
+    return(list(state=next_state, reward=100, done=TRUE))
+  }
+
+  return(list(state=next_state, reward=-2, done=FALSE))  # Penalize longer paths
+}
+
+# Generate one static maze
+generate_static_maze <- function(density=0.2) {
+  maze <- matrix(0, nrow=GRID_SIZE, ncol=GRID_SIZE)
+  wall_count <- round(density * GRID_SIZE * GRID_SIZE)
+  i <- 0
+  while (i < wall_count) {
+    x <- sample(1:GRID_SIZE, 1)
+    y <- sample(1:GRID_SIZE, 1)
+    if (!all(c(x, y) == START) && !all(c(x, y) == GOAL) && maze[x, y] == 0) {
+      maze[x, y] <- 1
+      i <- i + 1
+    }
+  }
+  maze
+}
+
+# Visualize maze with optional path
+plot_maze <- function(maze, path=NULL) {
+  df <- expand.grid(x=1:GRID_SIZE, y=1:GRID_SIZE)
+  df$type <- as.factor(as.vector(t(maze)))
+
+  p <- ggplot(df, aes(x, y)) +
+    geom_tile(aes(fill = type), color = "white") +
+    scale_fill_manual(values = c("0" = "white", "1" = "black")) +
+    coord_fixed() +
+    theme_minimal() +
+    geom_point(aes(x=START[2], y=START[1]), color="red", size=4) +
+    geom_point(aes(x=GOAL[2], y=GOAL[1]), color="green", size=4)
+
+  if (!is.null(path)) {
+    path_df <- as.data.frame(do.call(rbind, path))
+    colnames(path_df) <- c("x", "y")
+    p <- p + geom_path(data=path_df, aes(y=x, x=y), color="yellow", size=1)
+  }
+
+  print(p)
+  readline(prompt = "Press [enter] to continue to next episode...")
+}
+
+# Get greedy path from learned Q-table
+get_greedy_path <- function(q, maze) {
+  state <- START
+  path <- list(state)
+  for (step in 1:MAX_STEPS) {
+    action <- which.max(q[state[1], state[2], ])
+    result <- take_step(state, action, maze)
+    state <- result$state
+    path[[length(path)+1]] <- state
+    if (result$done) break
+  }
+  path
+}
+
+# SARSA Training
+train_sarsa_static <- function() {
+  q <- init_q_table()
+  rewards <- c()
+  steps_list <- c()
+
+  maze <- generate_static_maze()
+
+  for (ep in 1:EPISODES) {
+    state <- START
+    action <- choose_action(q, state, EPSILON)
+    total_reward <- 0
+    steps <- 0
+    path <- list(state)
+
+    for (step in 1:MAX_STEPS) {
+      result <- take_step(state, action, maze)
+      next_state <- result$state
+      reward <- result$reward
+      done <- result$done
+      total_reward <- total_reward + reward
+      steps <- steps + 1
+      path[[steps + 1]] <- next_state
+
+      next_action <- choose_action(q, next_state, EPSILON)
+
+      x <- state[1]; y <- state[2]
+      nx <- next_state[1]; ny <- next_state[2]
+
+      q[x, y, action] <- q[x, y, action] + ALPHA *
+        (reward + GAMMA * q[nx, ny, next_action] - q[x, y, action])
+
+      state <- next_state
+      action <- next_action
+
+      if (done) break
+    }
+
+    EPSILON <<- max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
+    rewards <- c(rewards, total_reward)
+    steps_list <- c(steps_list, steps)
+
+    cat(sprintf("Episode %d/%d | Reward: %d | Steps: %d | Epsilon: %.3f\n",
+                ep, EPISODES, total_reward, steps, EPSILON))
+
+    plot_maze(maze, path)
+  }
+
+  final_path <- get_greedy_path(q, maze)
+  plot_maze(maze, final_path)
+
+  dev.new()
+  par(mfrow = c(2, 1))
+  plot(rewards, type="l", col="blue", main="Total Reward per Episode", xlab="Episode", ylab="Reward")
+  plot(steps_list, type="l", col="darkgreen", main="Steps per Episode", xlab="Episode", ylab="Steps")
+}
+
+# Run training
+train_sarsa_static()
